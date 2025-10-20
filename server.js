@@ -9,6 +9,8 @@ const GoogleStrategy = require("passport-google-oauth20").Strategy;
 const jwt = require("jsonwebtoken");
 const cookieParser = require("cookie-parser");
 const helmet = require("helmet"); // Import helmet
+const csrf = require("csurf");
+const crypto = require("crypto"); // for key generation
 
 // newly added for s3 storage
 const {
@@ -51,21 +53,38 @@ app.use(
   })
 );
 app.use(express.static(path.join(__dirname, "public"), { index: false }));
+app.use(cookieParser());
+
+// Generate a strong session secret dynamically (fallback if missing in .env)
+const sessionSecret =
+  process.env.SESSION_SECRET ||
+  crypto.randomBytes(64).toString("hex");
+
+// Session Middleware
 app.use(
   session({
-    secret: process.env.SESSION_SECRET || "your_secret_key",
+    secret: sessionSecret,
+    name: "myToDoList.sid", // custom cookie name for clarity
     resave: false,
     saveUninitialized: false,
     cookie: {
-      secure: process.env.NODE_ENV === "production",
-      maxAge: 24 * 60 * 60 * 1000, // 24 hours
-      sameSite: process.env.NODE_ENV === "production" ? "None" : "Lax",
+      httpOnly: true, // prevent JavaScript access
+      secure: process.env.NODE_ENV === "production", // only via HTTPS in production
+      sameSite: "Strict", // blocks most CSRF scenarios
+      maxAge: 12 * 60 * 60 * 1000, // shorter lifetime: 12 hours
+      path: "/", // accessible across app
     },
   })
 );
-app.use(passport.initialize());
-app.use(passport.session());
-app.use(cookieParser());
+
+// Simple session activity logging
+app.use((req, res, next) => {
+  if (!req.session.logged) {
+    console.log(`🟢 New session started for IP: ${req.ip}`);
+    req.session.logged = true;
+  }
+  next();
+});
 
 // MongoDB Atlas connection
 const mongoUri = process.env.MONGODB_URI || "mongodb://mongo:27017/todo_db";
@@ -223,6 +242,10 @@ passport.deserializeUser(async (id, done) => {
   }
 });
 
+// Passport middleware (after session)
+app.use(passport.initialize());
+app.use(passport.session());
+
 // Google OAuth Routes
 app.get(
   "/auth/google",
@@ -251,6 +274,38 @@ app.get(
   }
 );
 
+// CSRF Protection Middleware
+const csrfProtection = csrf({
+  cookie: {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: process.env.NODE_ENV === "production" ? "None" : "Lax",
+  },
+});
+
+// Apply CSRF protection to authenticated routes only
+// app.use("/tasks", authenticateJWT, csrfProtection);
+// app.use("/users", authenticateJWT, checkRole("admin"), csrfProtection);
+
+// Routes that don't require CSRF or JWT
+app.get("/login", (req, res) => {
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, private");
+  res.sendFile(path.join(__dirname, "public", "login.html"));
+});
+
+app.get("/check", (req, res) => {
+  console.log("req.user:", req.user);
+  console.log("req.isAuthenticated():", req.isAuthenticated());
+  res.json({ isAuthenticated: req.isAuthenticated(), user: req.user });
+});
+
+// Protected routes and API endpoints
+
+// Expose the token for the frontend
+app.get("/csrf-token", csrfProtection, (req, res) => {
+  res.json({ csrfToken: req.csrfToken() });
+});
+
 app.get("/protected-route", authenticateJWT, (req, res) => {
   res.json({ message: "Access granted!" });
 });
@@ -269,22 +324,30 @@ app.get("/", (req, res) => {
   }
 });
 
-
-app.get("/login", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "login.html"));
-});
-
 app.post("/auth/logout", authenticateJWT, (req, res) => {
+  const userId = req.user ? req.user.id : "unknown"; // store before logout
+  console.log(`🔴 Logging out user ID: ${userId}`);
+
   req.logout(err => {
-    if (err) return res.status(500).json({ message: "Logout error" });
+    if (err) {
+      console.error("Logout error:", err);
+      return res.status(500).json({ message: "Logout error" });
+    }
 
     req.session.destroy(() => {
+      // Clear both cookies
+      res.clearCookie("myToDoList.sid", {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "Strict",
+      });
       res.clearCookie("token", {
         httpOnly: true,
         secure: process.env.NODE_ENV === "production",
-        sameSite: process.env.NODE_ENV === "production" ? "None" : "Lax",
+        sameSite: "Strict",
       });
-      return res.status(204).end(); // single response
+
+      res.redirect("/login");
     });
   });
 });
@@ -294,16 +357,14 @@ app.get("/logout", authenticateJWT, (req, res) => {
     if (err) return res.status(500).send("Logout error");
 
     req.session.destroy(() => {
-      res.clearCookie("token");
+      res.clearCookie("myToDoList.sid", {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "Strict",
+      });
       res.redirect("/login");
     });
   });
-});
-
-app.get("/check", (req, res) => {
-  console.log("req.user:", req.user);
-  console.log("req.isAuthenticated():", req.isAuthenticated());
-  res.json({ isAuthenticated: req.isAuthenticated(), user: req.user });
 });
 
 app.get("/api/current_user", authenticateJWT, async (req, res) => {
@@ -338,6 +399,7 @@ app.patch(
   "/users/:id/role",
   authenticateJWT,
   checkRole("admin"),
+  csrfProtection,
   async (req, res) => {
     try {
       const { role } = req.body;
@@ -368,6 +430,7 @@ app.delete(
   "/users/:id",
   authenticateJWT,
   checkRole("admin"),
+  csrfProtection,
   async (req, res) => {
     try {
       const deletedUser = await User.findByIdAndDelete(req.params.id);
@@ -382,7 +445,7 @@ app.delete(
   }
 );
 
-// Routes
+// Tasks Routes
 app.get("/tasks", authenticateJWT, async (req, res) => {
   try {
     // API endpoint to get task data
@@ -417,7 +480,7 @@ app.get("/tasks/:id", authenticateJWT, async (req, res) => {
   }
 });
 
-app.post("/tasks", authenticateJWT, async (req, res) => {
+app.post("/tasks", authenticateJWT, csrfProtection, async (req, res) => {
   console.log("User in /tasks:", req.user); // Debugging
 
   try {
@@ -434,7 +497,8 @@ app.post("/tasks", authenticateJWT, async (req, res) => {
     res.status(400).json({ message: err.message });
   }
 });
-app.delete("/tasks/:id", authenticateJWT, async (req, res) => {
+
+app.delete("/tasks/:id", authenticateJWT, csrfProtection, async (req, res) => {
   try {
     const task = await Task.findById(req.params.id);
 
@@ -454,7 +518,7 @@ app.delete("/tasks/:id", authenticateJWT, async (req, res) => {
   }
 });
 
-app.patch("/tasks/:id", authenticateJWT, async (req, res) => {
+app.patch("/tasks/:id", authenticateJWT, csrfProtection, async (req, res) => {
   try {
     const updatedTask = await Task.findByIdAndUpdate(
       req.params.id,
@@ -474,6 +538,35 @@ app.patch("/tasks/:id", authenticateJWT, async (req, res) => {
   } catch (err) {
     console.error("Error updating task:", err);
     res.status(400).json({ message: err.message });
+  }
+});
+
+// Serve privacy notice
+app.get("/privacy", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "privacy.html"));
+});
+
+// User account deletion (authenticated)
+app.delete("/users/delete-account", authenticateJWT, csrfProtection, async (req, res) => {
+  try {
+    const deletedUser = await User.findByIdAndDelete(req.user.id);
+    if (!deletedUser) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    await Task.deleteMany({ userId: req.user.id }); // delete associated tasks
+    console.log(`🗑️ User and associated data deleted: ${req.user.id}`);
+
+    res.clearCookie("token", {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "Strict",
+    });
+
+    res.status(200).json({ message: "Account and data deleted successfully." });
+  } catch (error) {
+    console.error("Error deleting account:", error);
+    res.status(500).json({ message: "Server error during account deletion." });
   }
 });
 

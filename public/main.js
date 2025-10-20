@@ -8,6 +8,17 @@ window.addEventListener("load", async () => {
   let currentlyEditingTask = null; // Track the currently editing task
   let images = []; // Array to hold image URLs
   let currentIndex = 0; // Index for cycling through images
+  let csrfToken = '';
+
+  async function getCsrfToken() {
+    const response = await fetch('/csrf-token', {
+      credentials: 'include'
+    });
+    const data = await response.json();
+    csrfToken = data.csrfToken;
+    console.log("CSRF Token fetched:", csrfToken);
+  }
+  getCsrfToken();
 
   // Check if user is logged in
   const response = await fetch("/api/current_user");
@@ -102,6 +113,7 @@ window.addEventListener("load", async () => {
                   method: "POST",
                   headers: {
                     "Content-Type": "application/json",
+                    'CSRF-Token': csrfToken
                   },
                   body: JSON.stringify(newTask),
                 });
@@ -456,6 +468,7 @@ window.addEventListener("load", async () => {
             method: "PATCH",
             headers: {
               "Content-Type": "application/json",
+              'CSRF-Token': csrfToken
             },
             body: JSON.stringify(updatedTask),
           });
@@ -507,6 +520,7 @@ window.addEventListener("load", async () => {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
+          'CSRF-Token': csrfToken
         },
         body: JSON.stringify(updatedTask),
       });
@@ -553,7 +567,7 @@ window.addEventListener("load", async () => {
       try {
         const response = await fetch("/tasks", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", 'CSRF-Token': csrfToken },
           body: JSON.stringify(task),
         });
 
@@ -667,5 +681,5 @@ window.addEventListener("load", async () => {
   }
 
   // Check for role changes every 3 seconds
-  setInterval(checkRoleChange, 3000);
+  // setInterval(checkRoleChange, 3000);
 });

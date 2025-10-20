@@ -8,6 +8,17 @@ window.addEventListener("load", async () => {
   let currentlyEditingTask = null; // Track the currently editing task
   let images = []; // Array to hold image URLs
   let currentIndex = 0; // Index for cycling through images
+  let csrfToken = '';
+
+  async function getCsrfToken() {
+    const response = await fetch('/csrf-token', {
+      credentials: 'include'
+    });
+    const data = await response.json();
+    csrfToken = data.csrfToken;
+    console.log("CSRF Token fetched:", csrfToken);
+  }
+  getCsrfToken();
 
   // Check if user is logged in
   const response = await fetch("/api/current_user");
@@ -98,10 +109,11 @@ window.addEventListener("load", async () => {
               };
 
               try {
-                const response = await fetch("https://my-todo-list-production.up.railway.app/tasks", {
+                const response = await fetch("/tasks", {
                   method: "POST",
                   headers: {
                     "Content-Type": "application/json",
+                    'CSRF-Token': csrfToken
                   },
                   body: JSON.stringify(newTask),
                 });
@@ -152,7 +164,7 @@ window.addEventListener("load", async () => {
   document
     .querySelector("#export-button")
     .addEventListener("click", async () => {
-      const response = await fetch("https://my-todo-list-production.up.railway.app/tasks");
+      const response = await fetch("/tasks");
       const tasks = await response.json();
 
       // Check if there are any tasks
@@ -252,7 +264,7 @@ window.addEventListener("load", async () => {
 
       const userId = user._id; // Assuming the API returns the user's ID
       const responseTasks = await fetch(
-        `https://my-todo-list-production.up.railway.app/tasks?userId=${userId}`
+        `/tasks?userId=${userId}`
       );
 
       if (responseTasks.status === 401) {
@@ -452,10 +464,11 @@ window.addEventListener("load", async () => {
             completed: task_checkbox_el.checked,
           };
 
-          await fetch(`https://my-todo-list-production.up.railway.app/tasks/${task_el.dataset.id}`, {
+          await fetch(`/tasks/${task_el.dataset.id}`, {
             method: "PATCH",
             headers: {
               "Content-Type": "application/json",
+              'CSRF-Token': csrfToken
             },
             body: JSON.stringify(updatedTask),
           });
@@ -489,7 +502,7 @@ window.addEventListener("load", async () => {
         );
 
         if (confirmDelete) {
-          await fetch(`https://my-todo-list-production.up.railway.app/tasks/${task_el.dataset.id}`, {
+          await fetch(`/tasks/${task_el.dataset.id}`, {
             method: "DELETE",
           });
           list_el.removeChild(task_el);
@@ -503,10 +516,11 @@ window.addEventListener("load", async () => {
         completed: task_checkbox_el.checked,
       };
 
-      await fetch(`https://my-todo-list-production.up.railway.app/tasks/${task_el.dataset.id}`, {
+      await fetch(`/tasks/${task_el.dataset.id}`, {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
+          'CSRF-Token': csrfToken
         },
         body: JSON.stringify(updatedTask),
       });
@@ -551,9 +565,9 @@ window.addEventListener("load", async () => {
       };
 
       try {
-        const response = await fetch("https://my-todo-list-production.up.railway.app/tasks", {
+        const response = await fetch("/tasks", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", 'CSRF-Token': csrfToken },
           body: JSON.stringify(task),
         });
 
@@ -602,7 +616,7 @@ window.addEventListener("load", async () => {
       if (!user) return;
 
       const userId = user._id; // Get user ID from API
-      const response = await fetch(`https://my-todo-list-production.up.railway.app/images?userId=${userId}`);
+      const response = await fetch(`/images?userId=${userId}`);
       images = await response.json();
 
       if (images.length > 0) {
@@ -667,5 +681,5 @@ window.addEventListener("load", async () => {
   }
 
   // Check for role changes every 3 seconds
-  setInterval(checkRoleChange, 3000);
+  // setInterval(checkRoleChange, 3000);
 });
